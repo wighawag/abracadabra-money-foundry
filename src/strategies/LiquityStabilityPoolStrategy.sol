@@ -15,21 +15,24 @@ contract LiquityStabilityPoolStrategyFrontendTag {
 contract LiquityStabilityPoolStrategy is BaseStrategy {
     using BoringERC20 for IERC20;
 
-    error InvalidFeePercent();
-    error InsupportedToken(IERC20 token);
-    error SwapFailed();
-    error InsufficientAmountOut();
+    error ErrInvalidFeePercent();
+    error ErrUnsupportedToken(IERC20 token);
+    error ErrSwapFailed();
+    error ErrInsufficientAmountOut();
 
-    event FeeChanged(uint256 previousFee, uint256 newFee, address previousFeeCollector, address newFeeCollector);
-    event SwapperChanged(address oldSwapper, address newSwapper);
-    event RewardSwapped(IERC20 token, uint256 total, uint256 amountOut, uint256 feeAmount);
-    event RewardTokenUpdated(IERC20 token, bool enabled);
+    event LogFeeChanged(uint256 previousFee, uint256 newFee, address previousFeeCollector, address newFeeCollector);
+    event LogFeeCollected(uint256 amountOu);
+    event LogSwapperChanged(address oldSwapper, address newSwapper);
+    event LogRewardSwapped(IERC20 token, uint256 total, uint256 amountOut);
+    event LogRewardTokenUpdated(IERC20 token, bool enabled);
+
+    uint256 public constant BIPS = 10_000;
 
     ILiquityStabilityPool public immutable pool;
     address public immutable tag;
 
     address public feeCollector;
-    uint8 public feePercent;
+    uint8 public feeBips;
     address public swapper;
 
     mapping(IERC20 => bool) public rewardTokenEnabled;
@@ -53,12 +56,13 @@ contract LiquityStabilityPoolStrategy is BaseStrategy {
         require(msg.sender == address(pool));
     }
 
-    /// @param token The reward token to add, use address(0) for ETH
-    function setRewardTokenEnabled(IERC20 token, bool enabled) external onlyOwner {
-        rewardTokenEnabled[token] = enabled;
-        emit RewardTokenUpdated(token, enabled);
-    }
-
+/**
+        uint256 feeAmount = (total * feeBips) / BIPS;
+        if (feeAmount > 0) {
+            amountOut = total - feeAmount;
+            IERC20(strategyToken).safeTransfer(feeCollector, feeAmount);
+        }
+ */
     function _skim(uint256 amount) internal virtual override {
         pool.provideToSP(amount, tag);
     }
@@ -82,7 +86,7 @@ contract LiquityStabilityPoolStrategy is BaseStrategy {
         bytes calldata data
     ) external onlyExecutor returns (uint256 amountOut) {
         if (!rewardTokenEnabled[rewardToken]) {
-            revert InsupportedToken(rewardToken);
+            revert ErrUnsupportedToken(rewardToken);
         }
 
         uint256 amountBefore = IERC20(strategyToken).balanceOf(address(this));
@@ -97,42 +101,42 @@ contract LiquityStabilityPoolStrategy is BaseStrategy {
 
         (bool success, ) = swapper.call{value: value}(data);
         if (!success) {
-            revert SwapFailed();
+            revert ErrSwapFailed();
         }
 
         uint256 total = IERC20(strategyToken).balanceOf(address(this)) - amountBefore;
 
         if (total < amountOutMin) {
-            revert InsufficientAmountOut();
-        }
-
-        uint256 feeAmount = (total * feePercent) / 100;
-        if (feeAmount > 0) {
-            amountOut = total - feeAmount;
-            IERC20(strategyToken).safeTransfer(feeCollector, feeAmount);
+            revert ErrInsufficientAmountOut();
         }
 
         if (address(rewardToken) != address(0)) {
             rewardToken.approve(swapper, 0);
         }
 
-        emit RewardSwapped(rewardToken, total, amountOut, feeAmount);
+        emit LogRewardSwapped(rewardToken, total, amountOut);
     }
 
-    function setFeeParameters(address _feeCollector, uint8 _feePercent) external onlyOwner {
-        if (feePercent > 100) {
-            revert InvalidFeePercent();
+    function setFeeParameters(address _feeCollector, uint8 _feeBips) external onlyOwner {
+        if (feeBips > BIPS) {
+            revert ErrInvalidFeePercent();
         }
 
-        emit FeeChanged(feePercent, _feePercent, feeCollector, _feeCollector);
+        emit LogFeeChanged(feeBips, _feeBips, feeCollector, _feeCollector);
 
         feeCollector = _feeCollector;
-        feePercent = _feePercent;
+        feeBips = _feeBips;
     }
 
     function setSwapper(address _swapper) external onlyOwner {
-        emit SwapperChanged(swapper, _swapper);
+        emit LogSwapperChanged(swapper, _swapper);
         swapper = _swapper;
+    }
+
+    /// @param token The reward token to add, use address(0) for ETH
+    function setRewardTokenEnabled(IERC20 token, bool enabled) external onlyOwner {
+        rewardTokenEnabled[token] = enabled;
+        emit LogRewardTokenUpdated(token, enabled);
     }
 
     function resetAllowance() external onlyOwner {
